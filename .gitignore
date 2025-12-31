@@ -75,3 +75,8 @@ Thumbs.db
 # GitHub Deploy Key
 github_deploy_key
 github_deploy_key.pub
+
+# Build artifacts
+*.zip
+*_BackUpThisFolder_ButDontShipItWithYourGame/
+Apk/
