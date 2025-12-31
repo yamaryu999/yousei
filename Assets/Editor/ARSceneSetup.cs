@@ -8,19 +8,129 @@ using UnityEngine.UI;
 using UnityEngine.EventSystems;
 using System.Collections.Generic;
 using UnityEngine.InputSystem.XR;
+using YouseiAR.Fairy;
+using UnityEditor.XR.Management;
+using UnityEngine.XR.Management;
+using System.Linq;
 
 namespace YouseiAR.Editor
 {
+    [InitializeOnLoad]
     public class ARSceneSetup
     {
+        static ARSceneSetup()
+        {
+            EditorApplication.delayCall += CheckAndFixScene;
+        }
+
+        private static void CheckAndFixScene()
+        {
+            // Only run if we are in the correct scene to avoid messing up other scenes
+            // For now, checks if the scene name is "yousei" or if it is an empty untitled scene
+            var activeScene = UnityEngine.SceneManagement.SceneManager.GetActiveScene();
+            if (activeScene.name != "yousei") return;
+
+            if (Object.FindObjectOfType<ARSession>() == null || Object.FindObjectOfType<MissionManager>() == null)
+            {
+                Debug.Log("Detected missing AR/Game components. Auto-fixing scene...");
+                SetupFullScene();
+            }
+        }
+
         [MenuItem("Tools/YouSei/Setup Full Game Scene")]
         public static void SetupFullScene()
         {
             SetupARCore();
             SetupGameSystem();
+            SetupARCore();
+            SetupGameSystem();
+            SetupGameSystem();
             SetupUI();
+            SetupProjectSettings();
+            SetupXRLoaders();
             
-            Debug.Log("Scene Setup Complete! Don't forget to assign your Fairy Prefab to the 'ARFairySpawner'.");
+            Debug.Log("Scene Setup Complete! 'AR Session', 'XR Origin', 'UI', and 'Fairy Spawner' have been created.");
+        }
+
+        private static void SetupProjectSettings()
+        {
+            // 1. Force OpenGLES3 (ARCore often has issues with Vulkan on Unity)
+            PlayerSettings.SetUseDefaultGraphicsAPIs(BuildTarget.Android, false);
+            PlayerSettings.SetGraphicsAPIs(BuildTarget.Android, new UnityEngine.Rendering.GraphicsDeviceType[] { 
+                UnityEngine.Rendering.GraphicsDeviceType.OpenGLES3 
+            });
+
+            // 2. Set Min SDK Version to 24 (Android 7.0) for ARCore
+            if (PlayerSettings.Android.minSdkVersion < AndroidSdkVersions.AndroidApiLevel24)
+            {
+                PlayerSettings.Android.minSdkVersion = AndroidSdkVersions.AndroidApiLevel24;
+            }
+            
+            // 3. Disable Multithreaded Rendering for safety (can cause black screen on some devices)
+            PlayerSettings.SetMobileMTRendering(BuildTargetGroup.Android, false);
+
+            Debug.Log("Project Settings Updated: Forced OpenGLES3, MinSDK 24, MT Rendering Off");
+        }
+
+        private static void SetupXRLoaders()
+        {
+            // Get Settings for Android
+            var buildTargetGroup = BuildTargetGroup.Android;
+            var settings = XRGeneralSettingsPerBuildTarget.XRGeneralSettingsForBuildTarget(buildTargetGroup);
+            
+            if (settings == null)
+            {
+                // Try to get asset
+                var settingsAsset = AssetDatabase.LoadAssetAtPath<XRGeneralSettingsPerBuildTarget>("Assets/XR/XRGeneralSettingsPerBuildTarget.asset");
+                if (settingsAsset != null)
+                {
+                    settings = settingsAsset.SettingsForBuildTarget(buildTargetGroup);
+                }
+            }
+
+            if (settings == null)
+            {
+                Debug.LogError("XR General Settings not found. Please verify XR Plug-in Management is installed/initialized.");
+                return;
+            }
+
+            var manager = settings.Manager;
+            if (manager == null)
+            {
+                // This shouldn't happen if initialized correctly, but just in case
+                Debug.LogError("XR Manager Settings is null for Android.");
+                return;
+            }
+
+            // Load ARCoreLoader Asset
+            var arCoreLoader = AssetDatabase.LoadAssetAtPath<XRLoader>("Assets/XR/Loaders/ARCoreLoader.asset");
+            if (arCoreLoader == null)
+            {
+                Debug.LogError("ARCore Loader Asset not found at Assets/XR/Loaders/ARCoreLoader.asset");
+                return;
+            }
+
+            // Check if already assigned
+            if (!manager.activeLoaders.Contains(arCoreLoader))
+            {
+#if UNITY_2020_2_OR_NEWER
+                manager.TryAddLoader(arCoreLoader);
+#else
+                // Older API might differ, but assuming 2021+ based on packages
+                if (manager.TryAddLoader(arCoreLoader)) {
+                    Debug.Log("Enabled ARCoreLoader for Android.");
+                } else {
+                    Debug.LogWarning("Failed to add ARCoreLoader.");
+                }
+#endif
+                EditorUtility.SetDirty(manager);
+                AssetDatabase.SaveAssets();
+                Debug.Log("ARCore Loader enabled in XR Plug-in Management.");
+            }
+            else
+            {
+                Debug.Log("ARCore Loader is already enabled.");
+            }
         }
 
         private static void SetupARCore()
@@ -105,8 +215,14 @@ namespace YouseiAR.Editor
                 Undo.RegisterCreatedObjectUndo(spawner, "Add Fairy Spawner");
             }
 
-            // Connect Spawner dependencies
+            // Assign Fairy Placeholder if missing
             SerializedObject spawnerSO = new SerializedObject(spawner);
+            if (spawnerSO.FindProperty("fairyPrefab").objectReferenceValue == null)
+            {
+                spawnerSO.FindProperty("fairyPrefab").objectReferenceValue = CreateFairyPlaceholder();
+            }
+
+            // Connect Spawner dependencies
             spawnerSO.FindProperty("planeManager").objectReferenceValue = xrOrigin.GetComponent<ARPlaneManager>();
             spawnerSO.FindProperty("raycastManager").objectReferenceValue = xrOrigin.GetComponent<ARRaycastManager>();
             spawnerSO.ApplyModifiedProperties();
@@ -327,6 +443,45 @@ namespace YouseiAR.Editor
             line.material = new Material(Shader.Find("Sprites/Default"));
             line.material.color = Color.yellow;
             
+            return PrefabUtility.SaveAsPrefabAssetAndConnect(go, prefabPath, InteractionMode.AutomatedAction);
+        }
+
+        private static GameObject CreateFairyPlaceholder()
+        {
+            var prefabPath = "Assets/Resources/FairyPlaceholder.prefab";
+            var existing = AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath);
+            if (existing != null) return existing;
+
+            var go = new GameObject("FairyPlaceholder");
+            
+            // Visuals
+            var capsule = GameObject.CreatePrimitive(PrimitiveType.Capsule);
+            capsule.transform.SetParent(go.transform, false);
+            capsule.transform.localPosition = new Vector3(0, 0.5f, 0); // Stand on ground
+            capsule.transform.localScale = Vector3.one * 0.3f;
+            
+            var mat = new Material(Shader.Find("Standard"));
+            mat.color = Color.magenta;
+            capsule.GetComponent<Renderer>().material = mat;
+
+            // Wings (simple quads)
+            var wingL = GameObject.CreatePrimitive(PrimitiveType.Quad);
+            wingL.transform.SetParent(capsule.transform, false);
+            wingL.transform.localPosition = new Vector3(-0.5f, 0.5f, -0.2f);
+            wingL.transform.localRotation = Quaternion.Euler(0, -30, 0);
+            
+            var wingR = GameObject.CreatePrimitive(PrimitiveType.Quad);
+            wingR.transform.SetParent(capsule.transform, false);
+            wingR.transform.localPosition = new Vector3(0.5f, 0.5f, -0.2f);
+            wingR.transform.localRotation = Quaternion.Euler(0, 30, 0);
+
+            // Essential Scripts
+            go.AddComponent<Animator>(); // Required by FairyAvatar
+            go.AddComponent<FairyAvatar>();
+            go.AddComponent<FairyInteract>();
+            go.AddComponent<FairyLookAtCamera>();
+            go.AddComponent<BoxCollider>().size = Vector3.one; // For interaction
+
             return PrefabUtility.SaveAsPrefabAssetAndConnect(go, prefabPath, InteractionMode.AutomatedAction);
         }
     }
