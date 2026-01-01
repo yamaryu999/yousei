@@ -108,11 +108,27 @@ namespace YouseiAR.AR
             }
 
             Debug.Log($"[ARFairySpawner] Instantiating Fairy at {pose.position}");
-            spawnedFairy = Instantiate(fairyPrefab, pose.position, pose.rotation);
+            
+            // Calculate rotation to face the camera (Y-axis only)
+            Vector3 directionToCamera = (Camera.main.transform.position - pose.position).normalized;
+            directionToCamera.y = 0; // Force horizontal
+            Quaternion spawnRotation = pose.rotation;
+            
+            if (directionToCamera != Vector3.zero)
+            {
+                // If it's a horizontal plane (likely floor), look at the camera.
+                // For vertical planes, we might want to stick to plane rotation, but for now let's prioritize facing user.
+                spawnRotation = Quaternion.LookRotation(directionToCamera);
+            }
+
+            spawnedFairy = Instantiate(fairyPrefab, pose.position, spawnRotation);
             if (plane != null)
             {
-                spawnedFairy.transform.SetParent(plane.transform, true);
-                Debug.Log("[ARFairySpawner] Parented to plane.");
+                // Do NOT enforce parenting to the plane. 
+                // If the ARPlane functions update or merge, the specific plane GameObject might be destroyed, which would destroy the fairy.
+                // Keeping it in world space is safer for simple persistence.
+                // spawnedFairy.transform.SetParent(plane.transform, true);
+                Debug.Log("[ARFairySpawner] Fairy spawned in world space (not parented to plane to avoid deletion).");
             }
         }
 

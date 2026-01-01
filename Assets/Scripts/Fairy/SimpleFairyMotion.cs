@@ -19,6 +19,18 @@ namespace YouseiAR.Fairy
         private void Start()
         {
             startPos = transform.localPosition;
+
+            // Auto-find wings if not assigned
+            if (wingL == null)
+            {
+                var foundL = transform.Find("WingL") ?? transform.Find("Wing_L") ?? transform.Find("wing_l");
+                if (foundL) wingL = foundL;
+            }
+            if (wingR == null)
+            {
+                var foundR = transform.Find("WingR") ?? transform.Find("Wing_R") ?? transform.Find("wing_r");
+                if (foundR) wingR = foundR;
+            }
         }
 
         private void Update()
